@@ -1,0 +1,15 @@
+streamlit
+pandas
+requests
+beautifulsoup4
+pdfplumber
+langchain
+langchain-community
+langchain-openai
+python-dotenv
+homebrew
+faiss-cpu
+pypdf2
+python-docx
+sentence-transformers
+openai

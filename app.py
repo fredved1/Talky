@@ -1,10 +1,10 @@
 import streamlit as st
 import PyPDF2
 import docx
-from langchain_community.document_loaders import TextLoader
+from langchain.document_loaders import TextLoader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain.chat_models import ChatOpenAI
@@ -12,20 +12,42 @@ import openai
 import os
 from dotenv import load_dotenv
 import time
+from langsmith import Client
+from langsmith.wrappers import wrap_openai
+from langsmith import traceable
 
-# Laad de omgevingsvariabelen uit het .env bestand
-load_dotenv(dotenv_path="api.env")
+# Load environment variables
+load_dotenv()
 
-# Haal de API-key op uit de omgevingsvariabelen
+# Retrieve the API key from the environment
 api_key = os.getenv("OPENAI_API_KEY")
 
-# Controleer of de API-key is ingesteld
+# Check if the API key is set
 if api_key is None:
-    st.error("OPENAI_API_KEY is niet ingesteld. Voeg deze toe aan je .env bestand.")
+    st.error("OPENAI_API_KEY is not set. Please add it to your .env file.")
     st.stop()
 
-# Initialiseer ChatOpenAI met de API-key en het nieuwe model
-llm = ChatOpenAI(model_name="gpt-3.5-turbo-16k", max_tokens=20000, api_key=api_key)
+# Initialize ChatOpenAI with the API key and the model
+llm = ChatOpenAI(model_name="gpt-3.5-turbo-16k", max_tokens=2000, api_key=api_key)
+
+# Auto-trace LLM calls in-context
+client = wrap_openai(openai.Client())
+
+@traceable # Auto-trace this function
+def pipeline(user_input: str):
+    result = client.chat.completions.create(
+        messages=[{"role": "user", "content": user_input}],
+        model="gpt-3.5-turbo"
+    )
+    return result.choices[0].message.content
+
+pipeline("Hello, world!")
+# Out:  Hello there! How can I assist you today?
+
+
+
+# Wrap the openai client for tracing
+openai_client = wrap_openai(openai.Client())
 
 # Function to load PDF content
 def load_pdf(file):
@@ -57,7 +79,7 @@ if uploaded_file is not None:
 
     # Simulate loading progress
     for percent_complete in range(100):
-        time.sleep(0.1)
+        time.sleep(0.05)  # Faster for UX, but adjust as necessary
         progress_bar.progress(percent_complete + 1)
         status_text.text(f"Loading... {percent_complete + 1}%")
 
@@ -81,11 +103,16 @@ if uploaded_file is not None:
 
     # Create conversation chain
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True, max_len=1000)
-    conversation = ConversationalRetrievalChain.from_llm(
-        llm=llm,  # Use the initialized ChatOpenAI model
-        retriever=db.as_retriever(),
-        memory=memory
-    )
+    
+    @traceable  # Auto-trace this function
+    def create_conversation_chain():
+        return ConversationalRetrievalChain.from_llm(
+            llm=llm,
+            retriever=db.as_retriever(),
+            memory=memory
+        )
+
+    conversation = create_conversation_chain()
 
     # Conversation interface
     st.subheader("Chat with your document")
@@ -97,9 +124,14 @@ if uploaded_file is not None:
     user_question = st.text_input("Ask a question about your document:")
 
     if user_question:
-        result = conversation({"question": user_question})
+        @traceable  # Auto-trace this function
+        def get_answer(question):
+            result = conversation({"question": question})
+            return result['answer']
+
+        answer = get_answer(user_question)
         st.session_state.chat_history.append(f"You: {user_question}")
-        st.session_state.chat_history.append(f"Chatbot: {result['answer']}")
+        st.session_state.chat_history.append(f"Chatbot: {answer}")
 
     for chat in st.session_state.chat_history:
         st.write(chat)
